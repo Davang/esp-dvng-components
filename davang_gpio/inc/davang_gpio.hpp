@@ -85,9 +85,19 @@ constexpr pin MAX_PIN = GPIO_PIN_COUNT;
 /*!< Generic davang namespace */
 namespace dvng
 {
-	
+class ci_gpio
+{
+	virtual int init( ) = 0;
+	virtual int set_level( const gpio::LEVEL & t_level ) = 0;
+	virtual gpio::LEVEL get_level( ) = 0;
+	virtual int set_high( ) = 0;
+	virtual int toggle( ) = 0;
+	virtual int set_low( ) = 0;
+	virtual int register_isr( gpio::isr t_isr, void * t_arguments ) = 0;
+};
+
 template < gpio::pin T_PIN, gpio::MODE T_MODE, gpio::PULL_UP T_PULLUP, gpio::PULL_DOWN T_PULLDOWN, gpio::INTERRUPT T_INTERRUPT = gpio::INTERRUPT::NONE >
-class c_gpio
+class c_gpio : ci_gpio
 {
 /* static asserts */
 	static_assert( gpio::MAX_PIN > T_PIN, " PIN should be less than the num of gpios in the device" );	
@@ -96,7 +106,7 @@ public:
 protected:
 private:
 	const gpio_config_t m_gpio_config;
-
+	gpio::LEVEL m_level;
 /* static data members */
 public:
 protected:
@@ -104,15 +114,21 @@ private:
 
 /* constructors and destructor */
 public:
-	constexpr c_gpio( ) :  m_gpio_config ( /* pin_bit_mask */ 1ULL << T_PIN,
-		/* mode */ static_cast< gpio_mode_t >( T_MODE ),
-		/* pull_up_en */ static_cast< gpio_pullup_t  >( T_PULLUP ),
-		/* pull_down_en */ static_cast< gpio_pulldown_t  >( T_PULLDOWN ),
-		/* intr_type */ static_cast< gpio_int_type_t  >( T_INTERRUPT ) )
+	constexpr c_gpio( ) : c_gpio( gpio::LEVEL::LOW )
 	{
 		// do nothing in the body.
 	};
 
+	constexpr c_gpio( const gpio::LEVEL t_level ) :  m_gpio_config ( /* pin_bit_mask */ 1ULL << T_PIN,
+			/* mode */ static_cast< gpio_mode_t >( T_MODE ),
+			/* pull_up_en */ static_cast< gpio_pullup_t  >( T_PULLUP ),
+			/* pull_down_en */ static_cast< gpio_pulldown_t  >( T_PULLDOWN ),
+			/* intr_type */ static_cast< gpio_int_type_t  >( T_INTERRUPT ) ) ,
+		m_level ( t_level )
+	{
+		// do nothing in the body.
+	}
+	
 protected:
 private:
 
@@ -121,50 +137,63 @@ private:
 public:	
 	
 	[[nodiscard("Always ensure valid pin initialization")]]
-	inline int init( )
+	virtual int init( ) override
 	{
 		return  gpio_config( &m_gpio_config );
 	}
 
 	[[nodiscard("Why get the level of a pin if not using it?")]]
-	inline gpio::LEVEL get_level( )
+	virtual gpio::LEVEL get_level( ) override
 	{
 		return  static_cast< gpio::LEVEL >( gpio_get_level( static_cast< gpio_num_t >( T_PIN ) ) );
 	}
 
-	inline int set_level( const gpio::LEVEL & t_level  )
+	virtual int set_level( const gpio::LEVEL & t_level ) override
 	{
 		if constexpr( gpio::MODE::INPUT == T_MODE )
-			static_assert( gpio::MODE::INPUT != T_MODE, "Cannot set the level of an input pin" );
-			
-		return gpio_set_level( static_cast< gpio_num_t >( T_PIN ), std::to_underlying( t_level ) );
+		{
+			return ESP_ERR_NOT_SUPPORTED;
+		}
+		else
+		{
+			m_level = t_level;
+			return gpio_set_level( static_cast< gpio_num_t >( T_PIN ), std::to_underlying( m_level ) );			
+		}
 	}
 	
-	inline int set_high( )
+	virtual int set_high( ) override
 	{
 		return set_level( gpio::LEVEL::HIGH );
 	}
 	
-	inline int set_low( )
+	virtual int set_low( ) override
 	{
-		return set_level( gpio::LEVEL::LOW );		
+		return set_level( gpio::LEVEL::LOW );
 	}
 	
-	inline int toggle( )
+	virtual int toggle( ) override
 	{
-		if( gpio::LEVEL::LOW == get_level( ) )
-			return set_level( gpio::LEVEL::HIGH );
+		if( gpio::LEVEL::LOW == m_level )
+		{
+			return set_high( );
+		}
 		else
-			return set_level( gpio::LEVEL::LOW );		
+		{
+			return set_low( );	
+		}
 	}
 	
 	[[nodiscard("Always ensure correct isr registration ")]]
-	inline int register_isr( gpio::isr t_isr, void * t_arguments )
+	virtual int register_isr( gpio::isr t_isr, void * t_arguments ) override
 	{
-		if constexpr( gpio::INTERRUPT::NONE == T_INTERRUPT )
-			static_assert( gpio::INTERRUPT::NONE != T_INTERRUPT, "Cannot register isr of pin with no interruption" );
-		
-		return gpio_isr_handler_add( static_cast< gpio_num_t >( T_PIN ), t_isr, t_arguments );
+		if constexpr( gpio::MODE::INPUT == T_MODE )
+		{
+			return ESP_ERR_NOT_SUPPORTED;
+		}
+		else
+		{
+			return gpio_isr_handler_add( static_cast< gpio_num_t >( T_PIN ), t_isr, t_arguments );
+		}
 	}
 
 protected:
@@ -180,8 +209,8 @@ private:
 namespace gpio
 {
 
-template < gpio::pin T_PIN, gpio::PULL_UP T_PULLUP, gpio::PULL_DOWN T_PULLDOWN, gpio::INTERRUPT T_INTERRUPT = gpio::INTERRUPT::NONE >
-using c_input = c_gpio< T_PIN, gpio::MODE::INPUT, T_PULLUP, T_PULLDOWN, T_INTERRUPT >;
+template < gpio::pin T_PIN, gpio::INTERRUPT T_INTERRUPT = gpio::INTERRUPT::NONE >
+using c_input = c_gpio< T_PIN, gpio::MODE::INPUT, gpio::PULL_UP::DISABLE, gpio::PULL_DOWN::DISABLE, T_INTERRUPT >;
 
 template < gpio::pin T_PIN, gpio::INTERRUPT T_INTERRUPT = gpio::INTERRUPT::NONE >
 using c_pull_up_input = c_gpio< T_PIN, gpio::MODE::INPUT, gpio::PULL_UP::ENABLE, gpio::PULL_DOWN::DISABLE, T_INTERRUPT 	>;
@@ -189,8 +218,8 @@ using c_pull_up_input = c_gpio< T_PIN, gpio::MODE::INPUT, gpio::PULL_UP::ENABLE,
 template < gpio::pin T_PIN, gpio::INTERRUPT T_INTERRUPT = gpio::INTERRUPT::NONE >
 using c_pull_down_input = c_gpio< T_PIN, gpio::MODE::INPUT, gpio::PULL_UP::DISABLE, gpio::PULL_DOWN::ENABLE, T_INTERRUPT >;
 
-template < gpio::pin T_PIN, gpio::PULL_UP T_PULLUP, gpio::PULL_DOWN T_PULLDOWN, gpio::INTERRUPT T_INTERRUPT = gpio::INTERRUPT::NONE >
-using c_output = c_gpio< T_PIN, gpio::MODE::OUTPUT, T_PULLUP, T_PULLDOWN, T_INTERRUPT >;
+template < gpio::pin T_PIN, gpio::INTERRUPT T_INTERRUPT = gpio::INTERRUPT::NONE >
+using c_output = c_gpio< T_PIN, gpio::MODE::OUTPUT, gpio::PULL_UP::DISABLE, gpio::PULL_DOWN::DISABLE, T_INTERRUPT >;
 
 template < gpio::pin T_PIN, gpio::PULL_UP T_PULLUP, gpio::PULL_DOWN T_PULLDOWN, gpio::INTERRUPT T_INTERRUPT = gpio::INTERRUPT::NONE >
 using c_open_drain_output = c_gpio< T_PIN, gpio::MODE::OUTPUT_OPEN_DRAIN, T_PULLUP, T_PULLDOWN, T_INTERRUPT >;
