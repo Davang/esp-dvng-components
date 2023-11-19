@@ -1,9 +1,9 @@
 /*!
- * \file	davang_uart.h
- * \details UART abstraction class declaration for ESP-IDF.
+ * \file	davang_gpio.h
+ * \details GPIO abstraction class declaration for ESP-IDF.
  * \author	Davang
- * \version	1.0.0.a
- * \date	2023/05/20
+ * \version	1.0.0
+ * \date	2023/09/25
  * \copyright MIT License
  */
 
@@ -13,7 +13,6 @@
 /* C/C++ includes */
 #include <utility>
 #include <cstdint>
-#include <errno.h>
 
 /* System specific libaries */
 #include "driver/gpio.h"
@@ -24,57 +23,58 @@
 /* 3rd party includes */
 
 
-/*!< Specific davang namespace for uart data types related. */
+/*!< Specific davang namespace for gpio data types related. */
 namespace  dvng::gpio
 {
 
 /* data types */
-/*!< Specific davang namespace for uart data types related. */
+/*!< Specific davang namespace for gpio data types related. */
 using pin = uint32_t;
 using isr = gpio_isr_t;
+
+// isr are like this : static void IRAM_ATTR gpio_isr_handler(void* arg)
 
 /* enumerators */
 
 enum class MODE : uint32_t
 {
-	INPUT = GPIO_MODE_INPUT ,
-	OUTPUT = GPIO_MODE_OUTPUT ,
-	OUTPUT_OPEN_DRAIN = GPIO_MODE_OUTPUT_OD ,
+	INPUT = GPIO_MODE_INPUT,
+	OUTPUT = GPIO_MODE_OUTPUT,
+	OUTPUT_OPEN_DRAIN = GPIO_MODE_OUTPUT_OD,
 };
 
 
 enum class PULL_UP : uint32_t
 {
-	DISABLE = GPIO_PULLUP_DISABLE ,
+	DISABLE = GPIO_PULLUP_DISABLE,
 	ENABLE = GPIO_PULLUP_ENABLE,
 };
 
 enum class PULL_DOWN : uint32_t
 {
-	DISABLE = GPIO_PULLDOWN_DISABLE ,
-	ENABLE = GPIO_PULLDOWN_ENABLE ,
+	DISABLE = GPIO_PULLDOWN_DISABLE,
+	ENABLE = GPIO_PULLDOWN_ENABLE,
 };
 
 enum class INTERRUPT : uint32_t
 {
-	NONE = GPIO_INTR_DISABLE  ,
-	RAISE = GPIO_INTR_POSEDGE ,
-	FALL = GPIO_INTR_NEGEDGE ,
-	EDGE = GPIO_INTR_ANYEDGE ,
-	LOW = GPIO_INTR_LOW_LEVEL ,
-	HIGH = GPIO_INTR_HIGH_LEVEL ,
+	NONE = GPIO_INTR_DISABLE,
+	RAISE = GPIO_INTR_POSEDGE,
+	FALL = GPIO_INTR_NEGEDGE,
+	EDGE = GPIO_INTR_ANYEDGE,
+	LOW = GPIO_INTR_LOW_LEVEL,
+	HIGH = GPIO_INTR_HIGH_LEVEL,
 };
 
 enum class LEVEL : uint32_t
 {
-	LOW = 0  ,
-	HIGH = 1 ,
+	LOW = 0,
+	HIGH = 1,
 };
-
 
 /* constants */
 
-/*!< Specific davang namespace for uart data types related. */
+/*!< Specific davang namespace for gpio data types related. */
 constexpr pin MAX_PIN = GPIO_PIN_COUNT;
 
 
@@ -85,6 +85,7 @@ constexpr pin MAX_PIN = GPIO_PIN_COUNT;
 /*!< Generic davang namespace */
 namespace dvng
 {
+
 class ci_gpio
 {
 	virtual int init( ) = 0;
@@ -100,7 +101,7 @@ template < gpio::pin T_PIN, gpio::MODE T_MODE, gpio::PULL_UP T_PULLUP, gpio::PUL
 class c_gpio : ci_gpio
 {
 /* static asserts */
-	static_assert( gpio::MAX_PIN > T_PIN, " PIN should be less than the num of gpios in the device" );	
+	static_assert( gpio::MAX_PIN > T_PIN, " PIN should be less than the num of gpios in the device" );
 /* data members */
 public:
 protected:
@@ -123,11 +124,13 @@ public:
 			/* mode */ static_cast< gpio_mode_t >( T_MODE ),
 			/* pull_up_en */ static_cast< gpio_pullup_t  >( T_PULLUP ),
 			/* pull_down_en */ static_cast< gpio_pulldown_t  >( T_PULLDOWN ),
-			/* intr_type */ static_cast< gpio_int_type_t  >( T_INTERRUPT ) ) ,
+			/* intr_type */ static_cast< gpio_int_type_t  >( T_INTERRUPT ) ),
 		m_level ( t_level )
 	{
 		// do nothing in the body.
 	}
+	
+	virtual ~c_gpio
 	
 protected:
 private:
@@ -186,13 +189,25 @@ public:
 	[[nodiscard("Always ensure correct isr registration ")]]
 	virtual int register_isr( gpio::isr t_isr, void * t_arguments ) override
 	{
-		if constexpr( gpio::MODE::INPUT == T_MODE )
+		if constexpr( gpio::INTERRUPT::NONE == T_INTERRUPT )
 		{
 			return ESP_ERR_NOT_SUPPORTED;
 		}
 		else
-		{
-			return gpio_isr_handler_add( static_cast< gpio_num_t >( T_PIN ), t_isr, t_arguments );
+		{			
+			esp_err_t error = gpio_set_intr_type(static_cast< gpio_num_t >( T_PIN ), static_cast< gpio_int_type_t >( T_INTERRUPT ));
+			
+			if( ESP_OK == error )
+			{
+				error = gpio_install_isr_service( 0 );
+			}
+			
+			if( ESP_OK == error )
+			{
+				error = gpio_isr_handler_add( static_cast< gpio_num_t >( T_PIN ), t_isr, t_arguments );
+			}
+			
+			return error;
 		}
 	}
 
